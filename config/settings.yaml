@@ -1,0 +1,93 @@
+# Medical Vector Database Configuration
+
+# API Settings
+api:
+  host: "0.0.0.0"
+  port: 8000
+  title: "Medical Vector Database API"
+  version: "1.0.0"
+  debug: false
+
+# Database Settings
+database:
+  chroma_path: "./data/chroma_db"
+  vector_dimension: 768
+  collection_name: "medical_documents"
+
+# OCR Settings
+ocr:
+  language: "eng"
+  config: "--psm 6"
+  tesseract_path: null  # Set to path if not in PATH
+  dpi: 300
+  preprocessing:
+    resize_min_width: 1000
+    noise_reduction: true
+    thresholding: true
+    morphological_ops: true
+
+# NER Settings
+ner:
+  spacy_model: "en_core_web_sm"
+  medical_model: "en_core_sci_md"
+  confidence_threshold: 0.7
+  transformer_model: "dmis-lab/biobert-base-cased-v1.1"
+  aggregation_strategy: "simple"
+
+# File Processing
+file_processing:
+  max_file_size: 52428800  # 50MB
+  allowed_extensions:
+    - ".pdf"
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".tiff"
+    - ".bmp"
+  upload_dir: "./data/raw"
+  processed_dir: "./data/processed"
+  temp_dir: "./data/temp"
+
+# Logging
+logging:
+  level: "INFO"
+  file: "./logs/app.log"
+  max_size: "10MB"
+  retention: "7 days"
+  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | {message}"
+
+# Processing
+processing:
+  batch_size: 10
+  max_workers: 4
+  timeout: 300  # 5 minutes
+  retry_attempts: 3
+
+# Security
+security:
+  cors_origins: ["*"]
+  allowed_hosts: ["*"]
+  max_upload_size: 52428800  # 50MB
+
+# Medical Entity Types
+entity_types:
+  medical:
+    - "MEDICATION"
+    - "PROCEDURE"
+    - "DIAGNOSIS"
+    - "BODY_PART"
+  general:
+    - "PERSON"
+    - "ORGANIZATION"
+    - "DATE"
+    - "MONEY"
+    - "LOCATION"
+    - "QUANTITY"
+
+# Search Settings
+search:
+  default_results: 10
+  max_results: 100
+  similarity_threshold: 0.5
+  highlight_text: true
+  include_metadata: true 
