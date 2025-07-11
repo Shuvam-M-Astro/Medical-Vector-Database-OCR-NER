@@ -29,6 +29,9 @@ opencv-python==4.8.1.78
 med7==1.0.0
 scispacy==0.5.3
 
+# Validation and security
+python-magic==0.4.27
+
 # Utilities
 python-dotenv==1.0.0
 requests==2.31.0
