@@ -5,6 +5,7 @@ API middleware for logging, validation, and error handling.
 import time
 import json
 import re
+import os
 from typing import Dict, Any
 from fastapi import Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,19 +19,22 @@ from ..utils.validation import InputValidator, ValidationError
 def setup_middleware(app):
     """Setup middleware for the FastAPI application."""
     
+    # Environment-aware CORS configuration
+    is_development = os.getenv("ENVIRONMENT", "development").lower() == "development"
+    
     # CORS middleware
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Configure appropriately for production
+        allow_origins=["*"] if is_development else ["http://localhost:3000", "https://yourdomain.com"],
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["*"] if is_development else ["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["*"] if is_development else ["Content-Type", "Authorization"],
     )
     
     # Trusted host middleware
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=["*"]  # Configure appropriately for production
+        allowed_hosts=["*"] if is_development else ["localhost", "127.0.0.1", "yourdomain.com"]
     )
     
     # Request validation middleware
