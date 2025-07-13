@@ -5,9 +5,12 @@ Main document processing service that orchestrates OCR, NER, and vector database
 import os
 import time
 import uuid
+import asyncio
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 from pathlib import Path
+from functools import lru_cache
+from concurrent.futures import ThreadPoolExecutor
 from loguru import logger
 
 from ..config import settings
@@ -29,11 +32,16 @@ class DocumentService:
         # In-memory document storage (in production, use a proper database)
         self.documents: Dict[str, Document] = {}
         
+        # Performance optimizations
+        self._executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
+        self._cache = {}
+        self._cache_ttl = 3600  # 1 hour cache TTL
+        
         logger.info("Document service initialized")
     
-    def process_document(self, file_path: str, metadata: Optional[Dict[str, Any]] = None) -> Document:
+    async def process_document(self, file_path: str, metadata: Optional[Dict[str, Any]] = None) -> Document:
         """
-        Process a document through the complete pipeline.
+        Process a document through the complete pipeline asynchronously.
         
         Args:
             file_path: Path to the document file
@@ -45,6 +53,14 @@ class DocumentService:
         start_time = time.time()
         
         try:
+            # Check cache first
+            cache_key = f"{file_path}_{hash(str(metadata))}"
+            if cache_key in self._cache:
+                cached_doc = self._cache[cache_key]
+                if time.time() - cached_doc.get('timestamp', 0) < self._cache_ttl:
+                    logger.info(f"Returning cached result for {file_path}")
+                    return cached_doc['document']
+            
             # Validate file
             if not self.ocr_service.validate_file(file_path):
                 raise ValueError(f"Unsupported file format: {file_path}")
@@ -56,28 +72,34 @@ class DocumentService:
             
             logger.info(f"Starting processing for document: {document.id}")
             
-            # Step 1: OCR Processing
-            extracted_text, ocr_confidence = self._perform_ocr(file_path)
+            # Step 1: OCR Processing (async)
+            extracted_text, ocr_confidence = await self._perform_ocr_async(file_path)
             document.extracted_text = extracted_text
             document.ocr_confidence = ocr_confidence
             
             logger.info(f"OCR completed for {document.id}: {len(extracted_text)} characters, {ocr_confidence:.2f} confidence")
             
-            # Step 2: NER Processing
-            entities = self.ner_service.extract_entities(extracted_text)
+            # Step 2: NER Processing (async)
+            entities = await self._perform_ner_async(extracted_text)
             document.entities = entities
             document.entity_count = len(entities)
             
             logger.info(f"NER completed for {document.id}: {len(entities)} entities found")
             
-            # Step 3: Vector Database Storage
-            vector_id = self.vector_service.add_document(document)
+            # Step 3: Vector Database Storage (async)
+            vector_id = await self._add_to_vector_db_async(document)
             document.vector_id = vector_id
             
             # Update document status
             document.status = DocumentStatus.COMPLETED
             document.updated_at = datetime.now()
             document.processing_time = time.time() - start_time
+            
+            # Cache the result
+            self._cache[cache_key] = {
+                'document': document,
+                'timestamp': time.time()
+            }
             
             logger.info(f"Document {document.id} processed successfully in {document.processing_time:.2f}s")
             
@@ -94,9 +116,9 @@ class DocumentService:
             logger.error(f"Document processing failed: {str(e)}")
             raise
     
-    def process_documents_batch(self, file_paths: List[str]) -> List[Document]:
+    async def process_documents_batch(self, file_paths: List[str]) -> List[Document]:
         """
-        Process multiple documents in batch.
+        Process multiple documents in batch asynchronously.
         
         Args:
             file_paths: List of file paths to process
@@ -104,27 +126,31 @@ class DocumentService:
         Returns:
             List of processed documents
         """
-        results = []
+        # Create tasks for concurrent processing
+        tasks = [self.process_document(file_path) for file_path in file_paths]
         
-        for file_path in file_paths:
-            try:
-                document = self.process_document(file_path)
-                results.append(document)
-            except Exception as e:
-                logger.error(f"Failed to process {file_path}: {str(e)}")
+        # Execute all tasks concurrently
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        processed_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Failed to process {file_paths[i]}: {str(result)}")
                 # Create failed document record
-                failed_doc = self._create_document_record(file_path)
+                failed_doc = self._create_document_record(file_paths[i])
                 failed_doc.status = DocumentStatus.FAILED
-                failed_doc.error_message = str(e)
+                failed_doc.error_message = str(result)
                 failed_doc.updated_at = datetime.now()
                 self.documents[failed_doc.id] = failed_doc
-                results.append(failed_doc)
+                processed_results.append(failed_doc)
+            else:
+                processed_results.append(result)
         
-        return results
+        return processed_results
     
-    def search_documents(self, query: str, n_results: int = 10) -> List[tuple]:
+    async def search_documents(self, query: str, n_results: int = 10) -> List[tuple]:
         """
-        Search documents by text query.
+        Search documents by text query with caching.
         
         Args:
             query: Search query
@@ -133,9 +159,26 @@ class DocumentService:
         Returns:
             List of (document, similarity_score) tuples
         """
-        return self.vector_service.search_documents(query, n_results)
+        # Check cache for search results
+        cache_key = f"search_{hash(query)}_{n_results}"
+        if cache_key in self._cache:
+            cached_result = self._cache[cache_key]
+            if time.time() - cached_result.get('timestamp', 0) < self._cache_ttl:
+                logger.info(f"Returning cached search results for query: {query}")
+                return cached_result['results']
+        
+        # Perform search
+        results = await self.vector_service.search_documents_async(query, n_results)
+        
+        # Cache the results
+        self._cache[cache_key] = {
+            'results': results,
+            'timestamp': time.time()
+        }
+        
+        return results
     
-    def search_by_entities(self, entities: List[str], n_results: int = 10) -> List[tuple]:
+    async def search_by_entities(self, entities: List[str], n_results: int = 10) -> List[tuple]:
         """
         Search documents by medical entities.
         
@@ -160,7 +203,7 @@ class DocumentService:
             )
             entity_objects.append(entity)
         
-        return self.vector_service.search_by_entities(entity_objects, n_results)
+        return await self.vector_service.search_by_entities_async(entity_objects, n_results)
     
     def get_document(self, document_id: str) -> Optional[Document]:
         """
@@ -186,9 +229,9 @@ class DocumentService:
         """
         return list(self.documents.values())[:limit]
     
-    def delete_document(self, document_id: str) -> bool:
+    async def delete_document(self, document_id: str) -> bool:
         """
-        Delete a document.
+        Delete a document asynchronously.
         
         Args:
             document_id: Document ID to delete
@@ -203,10 +246,13 @@ class DocumentService:
         try:
             # Remove from vector database
             if document.vector_id:
-                self.vector_service.delete_document(document.vector_id)
+                await self.vector_service.delete_document_async(document.vector_id)
             
             # Remove from memory
             del self.documents[document_id]
+            
+            # Clear cache entries for this document
+            self._clear_document_cache(document_id)
             
             logger.info(f"Deleted document {document_id}")
             return True
@@ -247,53 +293,59 @@ class DocumentService:
             "total_entities": total_entities,
             "entity_types": entity_types,
             "average_processing_time": avg_processing_time,
+            "cache_size": len(self._cache),
             "vector_db_stats": self.vector_service.get_collection_stats()
         }
     
     def _create_document_record(self, file_path: str, metadata: Optional[Dict[str, Any]] = None) -> Document:
-        """
-        Create a new document record.
+        """Create a new document record."""
+        document_id = str(uuid.uuid4())
+        filename = os.path.basename(file_path)
+        file_type = os.path.splitext(filename)[1].lower()
         
-        Args:
-            file_path: Path to the document file
-            metadata: Optional metadata
-            
-        Returns:
-            New document record
-        """
-        file_path_obj = Path(file_path)
-        
-        document = Document(
-            id=str(uuid.uuid4()),
-            filename=file_path_obj.name,
-            file_type=file_path_obj.suffix.lower(),
-            file_size=file_path_obj.stat().st_size,
-            status=DocumentStatus.PENDING,
+        return Document(
+            id=document_id,
+            filename=filename,
+            file_path=file_path,
+            file_type=file_type,
+            metadata=metadata or {},
             created_at=datetime.now(),
-            updated_at=datetime.now(),
-            metadata=metadata or {}
+            updated_at=datetime.now()
         )
-        
-        return document
+    
+    async def _perform_ocr_async(self, file_path: str) -> tuple:
+        """Perform OCR processing asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self._executor, 
+            self.ocr_service.extract_text, 
+            file_path
+        )
+    
+    async def _perform_ner_async(self, text: str) -> List:
+        """Perform NER processing asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self._executor, 
+            self.ner_service.extract_entities, 
+            text
+        )
+    
+    async def _add_to_vector_db_async(self, document: Document) -> str:
+        """Add document to vector database asynchronously."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self._executor, 
+            self.vector_service.add_document, 
+            document
+        )
+    
+    def _clear_document_cache(self, document_id: str):
+        """Clear cache entries for a specific document."""
+        keys_to_remove = [k for k in self._cache.keys() if document_id in str(k)]
+        for key in keys_to_remove:
+            del self._cache[key]
     
     def _perform_ocr(self, file_path: str) -> tuple:
-        """
-        Perform OCR on the document.
-        
-        Args:
-            file_path: Path to the document file
-            
-        Returns:
-            Tuple of (extracted_text, confidence)
-        """
-        file_ext = Path(file_path).suffix.lower()
-        
-        if file_ext == '.pdf':
-            # For PDFs, combine text from all pages
-            page_results = self.ocr_service.extract_text_from_pdf(file_path)
-            combined_text = " ".join([text for text, _ in page_results])
-            avg_confidence = sum(conf for _, conf in page_results) / len(page_results) if page_results else 0
-            return combined_text, avg_confidence
-        else:
-            # For images
-            return self.ocr_service.extract_text_from_image(file_path) 
+        """Synchronous OCR processing (kept for backward compatibility)."""
+        return self.ocr_service.extract_text(file_path) 
