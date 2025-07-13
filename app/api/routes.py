@@ -125,8 +125,8 @@ async def upload_document(
             except ValidationError as e:
                 raise HTTPException(status_code=400, detail=f"Invalid metadata: {str(e)}")
         
-        # Process document
-        document = document_service.process_document(temp_path, parsed_metadata)
+        # Process document asynchronously
+        document = await document_service.process_document(temp_path, parsed_metadata)
         
         # Validate processing results
         is_valid, quality_warnings = DataQualityValidator.validate_ocr_result(
@@ -200,8 +200,8 @@ async def search_documents(
         
         start_time = time.time()
         
-        # Perform search
-        results = document_service.search_documents(validated_query, n_results)
+        # Perform search asynchronously
+        results = await document_service.search_documents(validated_query, n_results)
         
         # Convert to response format
         search_results = []
@@ -257,25 +257,19 @@ async def list_documents(
         if not is_allowed:
             raise HTTPException(status_code=429, detail=rate_limit_error)
         
-        # Validate pagination parameters
-        if offset < 0:
-            raise HTTPException(status_code=400, detail="Offset cannot be negative")
-        
-        if limit > 1000:
-            raise HTTPException(status_code=400, detail="Limit too high (max: 1000)")
-        
+        # Get documents
         documents = document_service.get_all_documents(limit + offset)
-        documents = documents[offset:offset + limit]
+        paginated_documents = documents[offset:offset + limit]
         
         return DocumentListResponse(
-            documents=documents,
-            total=len(documents),
-            page=offset // limit + 1,
-            page_size=limit
+            success=True,
+            documents=paginated_documents,
+            total_count=len(documents),
+            limit=limit,
+            offset=offset,
+            message=f"Retrieved {len(paginated_documents)} documents"
         )
         
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Failed to list documents: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -302,12 +296,7 @@ async def get_document(
         if not is_allowed:
             raise HTTPException(status_code=429, detail=rate_limit_error)
         
-        # Validate document ID
-        try:
-            InputValidator.sanitize_string(document_id, max_length=100)
-        except ValidationError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid document ID: {str(e)}")
-        
+        # Get document
         document = document_service.get_document(document_id)
         if not document:
             raise HTTPException(status_code=404, detail="Document not found")
@@ -320,8 +309,6 @@ async def get_document(
         
     except HTTPException:
         raise
-    except ValidationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to get document {document_id}: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -339,7 +326,7 @@ async def delete_document(
         document_id: Document ID to delete
         
     Returns:
-        Success response
+        Deletion status
     """
     try:
         # Rate limiting
@@ -348,22 +335,18 @@ async def delete_document(
         if not is_allowed:
             raise HTTPException(status_code=429, detail=rate_limit_error)
         
-        # Validate document ID
-        try:
-            InputValidator.sanitize_string(document_id, max_length=100)
-        except ValidationError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid document ID: {str(e)}")
-        
-        success = document_service.delete_document(document_id)
+        # Delete document asynchronously
+        success = await document_service.delete_document(document_id)
         if not success:
             raise HTTPException(status_code=404, detail="Document not found")
         
-        return {"success": True, "message": "Document deleted successfully"}
+        return {
+            "success": True,
+            "message": f"Document {document_id} deleted successfully"
+        }
         
     except HTTPException:
         raise
-    except ValidationError as e:
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to delete document {document_id}: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -372,10 +355,10 @@ async def delete_document(
 @router.get("/stats", response_model=StatsResponse)
 async def get_statistics(request: Request):
     """
-    Get processing statistics.
+    Get system statistics.
     
     Returns:
-        Statistics about the system
+        System statistics
     """
     try:
         # Rate limiting
@@ -384,19 +367,15 @@ async def get_statistics(request: Request):
         if not is_allowed:
             raise HTTPException(status_code=429, detail=rate_limit_error)
         
+        # Get statistics
         stats = document_service.get_statistics()
         
         return StatsResponse(
-            total_documents=stats["total_documents"],
-            processed_documents=stats["completed_documents"],
-            failed_documents=stats["failed_documents"],
-            total_entities=stats["total_entities"],
-            entity_types=stats["entity_types"],
-            average_processing_time=stats["average_processing_time"]
+            success=True,
+            statistics=stats,
+            message="Statistics retrieved successfully"
         )
         
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Failed to get statistics: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -416,6 +395,8 @@ async def batch_upload_documents(
     Returns:
         Batch processing results
     """
+    start_time = time.time()
+    
     try:
         # Rate limiting
         client_id = get_client_id(request)
@@ -423,89 +404,68 @@ async def batch_upload_documents(
         if not is_allowed:
             raise HTTPException(status_code=429, detail=rate_limit_error)
         
-        # Validate batch size
-        if len(files) > 10:
-            raise HTTPException(status_code=400, detail="Too many files (max: 10)")
-        
-        if len(files) == 0:
+        # Validate files
+        if not files:
             raise HTTPException(status_code=400, detail="No files provided")
         
-        results = []
+        if len(files) > settings.BATCH_SIZE:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Too many files. Maximum batch size is {settings.BATCH_SIZE}"
+            )
         
+        # Save files temporarily
+        temp_paths = []
         for file in files:
+            if not file.filename:
+                raise HTTPException(status_code=400, detail="Invalid file")
+            
+            # Validate file
+            file_ext = os.path.splitext(file.filename)[1].lower()
+            if file_ext not in settings.ALLOWED_EXTENSIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported file type: {file.filename}"
+                )
+            
+            # Save file
+            temp_path = os.path.join(settings.UPLOAD_DIR, file.filename)
+            with open(temp_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
+            temp_paths.append(temp_path)
+        
+        # Process documents in batch asynchronously
+        documents = await document_service.process_documents_batch(temp_paths)
+        
+        # Clean up temp files
+        for temp_path in temp_paths:
             try:
-                # Validate individual file
-                if not file.filename:
-                    results.append({
-                        "filename": "unknown",
-                        "success": False,
-                        "error": "No filename provided"
-                    })
-                    continue
-                
-                # Validate filename
-                try:
-                    InputValidator.sanitize_string(file.filename, max_length=255)
-                except ValidationError as e:
-                    results.append({
-                        "filename": file.filename,
-                        "success": False,
-                        "error": f"Invalid filename: {str(e)}"
-                    })
-                    continue
-                
-                # Check file size
-                if file.size and file.size > settings.MAX_FILE_SIZE:
-                    results.append({
-                        "filename": file.filename,
-                        "success": False,
-                        "error": f"File too large: {file.size} bytes"
-                    })
-                    continue
-                
-                # Save and process file
-                temp_path = os.path.join(settings.UPLOAD_DIR, file.filename)
-                with open(temp_path, "wb") as buffer:
-                    shutil.copyfileobj(file.file, buffer)
-                
-                # Security validation
-                is_valid, security_error = FileValidator.validate_file_security(temp_path)
-                if not is_valid:
-                    try:
-                        os.remove(temp_path)
-                    except:
-                        pass
-                    results.append({
-                        "filename": file.filename,
-                        "success": False,
-                        "error": f"File validation failed: {security_error}"
-                    })
-                    continue
-                
-                # Process document
-                document = document_service.process_document(temp_path)
-                
-                results.append({
-                    "filename": file.filename,
-                    "success": True,
-                    "document_id": document.id,
-                    "entities_found": document.entity_count,
-                    "processing_time": document.processing_time
-                })
-                
-            except Exception as e:
-                results.append({
-                    "filename": file.filename,
-                    "success": False,
-                    "error": str(e)
-                })
+                os.remove(temp_path)
+            except:
+                pass
+        
+        processing_time = time.time() - start_time
+        
+        successful = [d for d in documents if d.status.value == "completed"]
+        failed = [d for d in documents if d.status.value == "failed"]
         
         return {
             "success": True,
             "total_files": len(files),
-            "processed_files": len([r for r in results if r["success"]]),
-            "failed_files": len([r for r in results if not r["success"]]),
-            "results": results
+            "successful": len(successful),
+            "failed": len(failed),
+            "processing_time": processing_time,
+            "documents": [
+                {
+                    "id": doc.id,
+                    "filename": doc.filename,
+                    "status": doc.status.value,
+                    "entities_found": doc.entity_count,
+                    "error": doc.error_message if doc.error_message else None
+                }
+                for doc in documents
+            ],
+            "message": f"Processed {len(successful)} documents successfully, {len(failed)} failed"
         }
         
     except HTTPException:
