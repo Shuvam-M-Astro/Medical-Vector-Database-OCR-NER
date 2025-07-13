@@ -7,10 +7,14 @@ from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
 from typing import List, Dict, Any, Optional, Tuple
 import uuid
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from loguru import logger
+import time
 
 from ..config import settings
-from ..models.document import Document, Entity
+from ..models.document import Document, DocumentStatus
 
 
 class VectorService:
@@ -23,8 +27,8 @@ class VectorService:
             settings=Settings(anonymized_telemetry=False)
         )
         
-        # Initialize embedding model
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # Initialize embedding model with caching
+        self.embedding_model = self._get_embedding_model()
         
         # Get or create collection
         self.collection = self.client.get_or_create_collection(
@@ -32,7 +36,20 @@ class VectorService:
             metadata={"description": "Medical documents with OCR and NER"}
         )
         
+        # Performance optimizations
+        self._executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
+        self._embedding_cache = {}
+        self._cache_ttl = 3600  # 1 hour cache TTL
+        
         logger.info("Vector service initialized")
+    
+    @lru_cache(maxsize=1)
+    def _get_embedding_model(self) -> SentenceTransformer:
+        """Get embedding model with caching."""
+        logger.info("Loading embedding model...")
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        logger.info("Embedding model loaded successfully")
+        return model
     
     def add_document(self, document: Document) -> str:
         """
@@ -48,8 +65,8 @@ class VectorService:
             # Create document text for embedding
             doc_text = self._create_document_text(document)
             
-            # Generate embedding
-            embedding = self.embedding_model.encode(doc_text).tolist()
+            # Generate embedding with caching
+            embedding = self._get_embedding_cached(doc_text)
             
             # Create metadata
             metadata = self._create_metadata(document)
@@ -70,6 +87,23 @@ class VectorService:
             logger.error(f"Failed to add document to vector database: {str(e)}")
             raise
     
+    async def add_document_async(self, document: Document) -> str:
+        """
+        Add a document to the vector database asynchronously.
+        
+        Args:
+            document: Document to add
+            
+        Returns:
+            Vector ID of the added document
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self._executor, 
+            self.add_document, 
+            document
+        )
+    
     def search_documents(self, query: str, n_results: int = 10) -> List[Tuple[Document, float]]:
         """
         Search documents by text query.
@@ -82,8 +116,8 @@ class VectorService:
             List of (document, similarity_score) tuples
         """
         try:
-            # Generate query embedding
-            query_embedding = self.embedding_model.encode(query).tolist()
+            # Generate query embedding with caching
+            query_embedding = self._get_embedding_cached(query)
             
             # Search collection
             results = self.collection.query(
@@ -110,7 +144,26 @@ class VectorService:
             logger.error(f"Search failed: {str(e)}")
             return []
     
-    def search_by_entities(self, entities: List[Entity], n_results: int = 10) -> List[Tuple[Document, float]]:
+    async def search_documents_async(self, query: str, n_results: int = 10) -> List[Tuple[Document, float]]:
+        """
+        Search documents by text query asynchronously.
+        
+        Args:
+            query: Search query
+            n_results: Number of results to return
+            
+        Returns:
+            List of (document, similarity_score) tuples
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self._executor, 
+            self.search_documents, 
+            query, 
+            n_results
+        )
+    
+    def search_by_entities(self, entities: List[Document.Entity], n_results: int = 10) -> List[Tuple[Document, float]]:
         """
         Search documents by medical entities.
         
@@ -126,6 +179,23 @@ class VectorService:
         query = " ".join(entity_texts)
         
         return self.search_documents(query, n_results)
+    
+    async def search_by_entities_async(self, entities: List[Document.Entity], n_results: int = 10) -> List[Tuple[Document, float]]:
+        """
+        Search documents by medical entities asynchronously.
+        
+        Args:
+            entities: List of medical entities
+            n_results: Number of results to return
+            
+        Returns:
+            List of (document, similarity_score) tuples
+        """
+        # Create query from entity texts
+        entity_texts = [entity.text for entity in entities]
+        query = " ".join(entity_texts)
+        
+        return await self.search_documents_async(query, n_results)
     
     def update_document(self, document: Document) -> bool:
         """
@@ -153,6 +223,23 @@ class VectorService:
             logger.error(f"Failed to update document: {str(e)}")
             return False
     
+    async def update_document_async(self, document: Document) -> bool:
+        """
+        Update a document in the vector database asynchronously.
+        
+        Args:
+            document: Updated document
+            
+        Returns:
+            True if successful
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self._executor, 
+            self.update_document, 
+            document
+        )
+    
     def delete_document(self, vector_id: str) -> bool:
         """
         Delete a document from the vector database.
@@ -172,6 +259,23 @@ class VectorService:
             logger.error(f"Failed to delete document: {str(e)}")
             return False
     
+    async def delete_document_async(self, vector_id: str) -> bool:
+        """
+        Delete a document from the vector database asynchronously.
+        
+        Args:
+            vector_id: Vector ID of document to delete
+            
+        Returns:
+            True if successful
+        """
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            self._executor, 
+            self.delete_document, 
+            vector_id
+        )
+    
     def get_document_count(self) -> int:
         """Get total number of documents in the database."""
         return self.collection.count()
@@ -182,8 +286,37 @@ class VectorService:
         return {
             "total_documents": count,
             "embedding_dimension": settings.VECTOR_DIMENSION,
-            "collection_name": "medical_documents"
+            "collection_name": "medical_documents",
+            "embedding_cache_size": len(self._embedding_cache)
         }
+    
+    def _get_embedding_cached(self, text: str) -> List[float]:
+        """
+        Get embedding with caching.
+        
+        Args:
+            text: Text to embed
+            
+        Returns:
+            Embedding vector
+        """
+        # Check cache first
+        cache_key = hash(text)
+        if cache_key in self._embedding_cache:
+            cached_result = self._embedding_cache[cache_key]
+            if time.time() - cached_result.get('timestamp', 0) < self._cache_ttl:
+                return cached_result['embedding']
+        
+        # Generate embedding
+        embedding = self.embedding_model.encode(text).tolist()
+        
+        # Cache the result
+        self._embedding_cache[cache_key] = {
+            'embedding': embedding,
+            'timestamp': time.time()
+        }
+        
+        return embedding
     
     def _create_document_text(self, document: Document) -> str:
         """
@@ -263,20 +396,15 @@ class VectorService:
         """
         from datetime import datetime
         
-        # This is a simplified conversion - in practice you'd want to store
-        # the full document object separately or in a different database
-        document = Document(
+        return Document(
             id=metadata.get("document_id", ""),
             filename=metadata.get("filename", ""),
             file_type=metadata.get("file_type", ""),
-            file_size=0,  # Not stored in metadata
-            status=metadata.get("status", "completed"),
-            created_at=datetime.fromisoformat(metadata.get("created_at", "2023-01-01T00:00:00")),
-            updated_at=datetime.fromisoformat(metadata.get("updated_at", "2023-01-01T00:00:00")),
+            status=DocumentStatus(metadata.get("status", "pending")),
+            created_at=datetime.fromisoformat(metadata.get("created_at", datetime.now().isoformat())),
+            updated_at=datetime.fromisoformat(metadata.get("updated_at", datetime.now().isoformat())),
             entity_count=metadata.get("entity_count", 0),
             ocr_confidence=metadata.get("ocr_confidence", 0.0),
             processing_time=metadata.get("processing_time", 0.0),
             metadata=metadata
-        )
-        
-        return document 
+        ) 
