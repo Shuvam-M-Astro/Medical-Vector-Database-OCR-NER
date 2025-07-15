@@ -45,6 +45,11 @@ class Settings(BaseSettings):
     BATCH_SIZE: int = 10
     MAX_WORKERS: int = 4
     
+    # Critical Performance Settings
+    REQUEST_TIMEOUT: int = 30  # seconds
+    CONNECTION_POOL_SIZE: int = 20
+    MAX_CONCURRENT_REQUESTS: int = 100
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
