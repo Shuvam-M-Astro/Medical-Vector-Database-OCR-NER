@@ -8,6 +8,7 @@ A comprehensive system for processing medical invoices and unstructured data usi
 - **Named Entity Recognition**: Identify medical entities like medications, procedures, diagnoses
 - **Vector Database**: Store and search processed documents using ChromaDB
 - **REST API**: FastAPI-based API for document upload and search
+- **Web Dashboard**: Modern React frontend for document management and search
 - **Medical NER**: Specialized models for medical text analysis
 - **Batch Processing**: Process multiple documents efficiently
 
@@ -15,49 +16,33 @@ A comprehensive system for processing medical invoices and unstructured data usi
 
 ```
 medical-vector-database-ner/
-├── app/
+├── app/                       # Backend API
 │   ├── __init__.py
-│   ├── main.py                 # FastAPI application
-│   ├── config.py              # Configuration settings
-│   ├── models/
-│   │   ├── __init__.py
-│   │   ├── document.py        # Document data models
-│   │   └── response.py        # API response models
-│   ├── services/
-│   │   ├── __init__.py
-│   │   ├── ocr_service.py     # OCR processing
-│   │   ├── ner_service.py     # Named Entity Recognition
-│   │   ├── vector_service.py  # Vector database operations
-│   │   └── document_service.py # Document processing pipeline
-│   ├── api/
-│   │   ├── __init__.py
-│   │   ├── routes.py          # API endpoints
-│   │   └── middleware.py      # API middleware
-│   └── utils/
-│       ├── __init__.py
-│       ├── file_utils.py      # File handling utilities
-│       └── text_utils.py      # Text processing utilities
-├── scripts/
-│   ├── setup_models.py        # Download and setup NER models
-│   ├── batch_process.py       # Batch document processing
-│   └── test_ocr.py           # OCR testing script
-├── tests/
-│   ├── __init__.py
-│   ├── test_ocr.py
-│   ├── test_ner.py
-│   └── test_vector.py
-├── data/
-│   ├── raw/                   # Raw documents
-│   ├── processed/             # Processed documents
-│   └── models/               # Downloaded models
-├── config/
-│   └── settings.yaml         # Configuration file
-├── requirements.txt
-├── .env.example
+│   ├── main.py               # FastAPI application
+│   ├── config.py             # Configuration settings
+│   ├── models/               # Data models
+│   ├── services/             # Business logic
+│   ├── api/                  # API routes
+│   └── utils/                # Utilities
+├── frontend/                 # React Dashboard
+│   ├── src/
+│   │   ├── components/       # UI components
+│   │   ├── pages/           # Page components
+│   │   ├── services/        # API services
+│   │   └── types/           # TypeScript types
+│   ├── package.json
+│   └── README.md
+├── scripts/                  # Utility scripts
+├── tests/                    # Backend tests
+├── data/                     # Data storage
+├── config/                   # Configuration
+├── requirements.txt          # Python dependencies
 └── README.md
 ```
 
 ## Installation
+
+### Backend Setup
 
 1. **Clone the repository**:
    ```bash
@@ -87,15 +72,51 @@ medical-vector-database-ner/
    python scripts/setup_models.py
    ```
 
+### Frontend Setup
+
+1. **Install Node.js** (version 16+):
+   - Download from https://nodejs.org/
+
+2. **Install frontend dependencies**:
+   ```bash
+   cd frontend
+   npm install
+   ```
+
+3. **Start the frontend**:
+   ```bash
+   npm run dev
+   ```
+
+The dashboard will be available at `http://localhost:3000`
+
 ## Usage
 
-### Starting the API Server
+### Starting the Backend API
 
 ```bash
 python -m app.main
 ```
 
 The API will be available at `http://localhost:8000`
+
+### Using the Web Dashboard
+
+1. **Start the backend API** (see above)
+2. **Start the frontend**:
+   ```bash
+   cd frontend
+   npm run dev
+   ```
+3. **Open your browser** to `http://localhost:3000`
+
+### Dashboard Features
+
+- **Upload Documents**: Drag-and-drop interface for uploading medical documents
+- **Search**: Advanced search with entity filtering and confidence scoring
+- **Document Management**: View, delete, and manage all uploaded documents
+- **Analytics**: Charts and statistics for processing insights
+- **Real-time Updates**: Live updates of processing status and results
 
 ### API Endpoints
 
