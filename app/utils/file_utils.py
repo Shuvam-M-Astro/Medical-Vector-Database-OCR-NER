@@ -91,40 +91,36 @@ def calculate_file_hash(file_path: str, algorithm: str = "sha256") -> str:
     return hash_obj.hexdigest()
 
 
-def cleanup_temp_files(directory: str, max_age_hours: int = 24) -> int:
+def cleanup_temp_files(upload_dir: str, max_age_hours: int = 1) -> int:
     """
-    Clean up temporary files older than specified age.
+    Clean up temporary files older than specified hours.
     
     Args:
-        directory: Directory to clean
-        max_age_hours: Maximum age in hours
+        upload_dir: Directory to clean
+        max_age_hours: Maximum age in hours before cleanup
         
     Returns:
         Number of files cleaned
     """
     import time
+    import os
     
     cleaned_count = 0
     current_time = time.time()
-    max_age_seconds = max_age_hours * 3600
     
-    try:
-        for filename in os.listdir(directory):
-            file_path = os.path.join(directory, filename)
-            
-            if os.path.isfile(file_path):
-                file_age = current_time - os.path.getmtime(file_path)
-                
-                if file_age > max_age_seconds:
-                    try:
-                        os.remove(file_path)
-                        cleaned_count += 1
-                        logger.info(f"Cleaned up old file: {file_path}")
-                    except Exception as e:
-                        logger.error(f"Failed to clean up {file_path}: {str(e)}")
+    if not os.path.exists(upload_dir):
+        return 0
     
-    except Exception as e:
-        logger.error(f"Failed to clean up directory {directory}: {str(e)}")
+    for filename in os.listdir(upload_dir):
+        file_path = os.path.join(upload_dir, filename)
+        if os.path.isfile(file_path):
+            file_age = current_time - os.path.getmtime(file_path)
+            if file_age > (max_age_hours * 3600):
+                try:
+                    os.remove(file_path)
+                    cleaned_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to remove temp file {filename}: {str(e)}")
     
     return cleaned_count
 
