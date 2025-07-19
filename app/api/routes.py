@@ -33,19 +33,14 @@ def get_client_id(request: Request) -> str:
     return client_ip
 
 
-@router.get("/health", response_model=HealthResponse)
+@router.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return HealthResponse(
-        status="healthy",
-        version="1.0.0",
-        services={
-            "ocr": "available",
-            "ner": "available",
-            "vector_db": "available"
-        },
-        timestamp=datetime.now().isoformat()
-    )
+    """Simple health check endpoint."""
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "Medical Vector Database API"
+    }
 
 
 @router.post("/upload", response_model=ProcessingResponse)
