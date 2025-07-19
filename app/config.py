@@ -50,31 +50,6 @@ class Settings(BaseSettings):
     CONNECTION_POOL_SIZE: int = 20
     MAX_CONCURRENT_REQUESTS: int = 100
     
-    # Retry and Circuit Breaker Settings
-    MAX_RETRY_ATTEMPTS: int = 3
-    RETRY_BASE_DELAY: float = 1.0  # seconds
-    RETRY_MAX_DELAY: float = 60.0  # seconds
-    RETRY_EXPONENTIAL_BASE: float = 2.0
-    CIRCUIT_BREAKER_FAILURE_THRESHOLD: int = 5
-    CIRCUIT_BREAKER_RECOVERY_TIMEOUT: int = 60  # seconds
-    CIRCUIT_BREAKER_EXPECTED_EXCEPTION: bool = True
-    
-    # Health Check Settings
-    HEALTH_CHECK_INTERVAL: int = 30  # seconds
-    HEALTH_CHECK_TIMEOUT: int = 10  # seconds
-    UNHEALTHY_THRESHOLD: int = 3
-    
-    # Resource Management
-    MAX_MEMORY_USAGE: int = 80  # percentage
-    DISK_SPACE_THRESHOLD: int = 90  # percentage
-    TEMP_FILE_CLEANUP_INTERVAL: int = 3600  # seconds
-    
-    # Monitoring and Alerting
-    ENABLE_METRICS: bool = True
-    METRICS_PORT: int = 9090
-    ALERT_EMAIL: Optional[str] = None
-    SLACK_WEBHOOK_URL: Optional[str] = None
-    
     class Config:
         env_file = ".env"
         case_sensitive = False
