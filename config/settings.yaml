@@ -24,15 +24,12 @@ ocr:
     resize_min_width: 1000
     noise_reduction: true
     thresholding: true
-    morphological_ops: true
 
 # NER Settings
 ner:
   spacy_model: "en_core_web_sm"
   medical_model: "en_core_sci_md"
   confidence_threshold: 0.7
-  transformer_model: "dmis-lab/biobert-base-cased-v1.1"
-  aggregation_strategy: "simple"
 
 # File Processing
 file_processing:
@@ -46,7 +43,6 @@ file_processing:
     - ".bmp"
   upload_dir: "./data/raw"
   processed_dir: "./data/processed"
-  temp_dir: "./data/temp"
 
 # Logging
 logging:
@@ -54,14 +50,12 @@ logging:
   file: "./logs/app.log"
   max_size: "10MB"
   retention: "7 days"
-  format: "{time:YYYY-MM-DD HH:mm:ss} | {level} | {name}:{function}:{line} | {message}"
 
 # Processing
 processing:
   batch_size: 10
   max_workers: 4
   timeout: 300  # 5 minutes
-  retry_attempts: 3
 
 # Security
 security:
@@ -89,5 +83,4 @@ search:
   default_results: 10
   max_results: 100
   similarity_threshold: 0.5
-  highlight_text: true
-  include_metadata: true 
+  highlight_text: true 
