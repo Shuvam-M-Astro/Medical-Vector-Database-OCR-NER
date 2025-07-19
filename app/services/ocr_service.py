@@ -13,7 +13,6 @@ from typing import Tuple, Optional, List
 from loguru import logger
 
 from ..config import settings
-from ..utils.retry import with_retry, ocr_circuit_breaker
 
 
 class OCRService:
@@ -28,10 +27,9 @@ class OCRService:
         if settings.TESSERACT_PATH:
             pytesseract.pytesseract.tesseract_cmd = settings.TESSERACT_PATH
     
-    @with_retry(max_attempts=3, base_delay=1.0, max_delay=10.0)
     async def extract_text_from_image(self, image_path: str) -> Tuple[str, float]:
         """
-        Extract text from an image file with retry and circuit breaker protection.
+        Extract text from an image file.
         
         Args:
             image_path: Path to the image file
@@ -39,11 +37,11 @@ class OCRService:
         Returns:
             Tuple of (extracted_text, confidence_score)
         """
-        return await ocr_circuit_breaker.call(self._extract_text_from_image_sync, image_path)
+        return self._extract_text_from_image_sync(image_path)
     
     def _extract_text_from_image_sync(self, image_path: str) -> Tuple[str, float]:
         """
-        Synchronous OCR extraction (used by circuit breaker).
+        Synchronous OCR extraction.
         
         Args:
             image_path: Path to the image file
